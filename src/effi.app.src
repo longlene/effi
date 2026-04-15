@@ -1,0 +1,10 @@
+{application, effi, [
+    {description, "Erlang CFFI — call C shared libraries from Erlang via libffi"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [kernel, stdlib]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/example/effi"}]}
+]}.

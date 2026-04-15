@@ -1,0 +1,102 @@
+%% effi_port_SUITE.erl — Common Test suite for effi_port (port safe mode).
+
+-module(effi_port_SUITE).
+-compile([export_all, nowarn_export_all]).
+
+-include_lib("common_test/include/ct.hrl").
+
+all() ->
+    [t_load, t_sqrt, t_alloc_rw, t_struct_rw, t_array, t_crash_isolation].
+
+init_per_suite(Config) ->
+    Config.
+
+end_per_suite(_Config) -> ok.
+
+%% -------------------------------------------------------------------------
+%% t_load: open libm, verify we get a port_lib back, then close.
+%% -------------------------------------------------------------------------
+t_load(_Config) ->
+    {ok, Lib} = effi_port:load("libm.so.6"),
+    {port_lib, Pid, _Handle} = Lib,
+    true = is_pid(Pid),
+    ok = effi_port:close(Lib).
+
+%% -------------------------------------------------------------------------
+%% t_sqrt: call sqrt(4.0) → 2.0
+%% -------------------------------------------------------------------------
+t_sqrt(_Config) ->
+    {ok, Lib} = effi_port:load("libm.so.6"),
+    {ok, 2.0} = effi_port:call(Lib, "sqrt", double, [{double, 4.0}]),
+    {ok, R}   = effi_port:call(Lib, "sqrt", double, [{double, 2.0}]),
+    true      = abs(R - 1.41421356) < 1.0e-6,
+    ok = effi_port:close(Lib).
+
+%% -------------------------------------------------------------------------
+%% t_alloc_rw: alloc, write int32, read it back, free.
+%%
+%% Note: alloc/2 returns {port_ptr,...} directly (no {ok,...} wrapper).
+%%       read/2, write/3, free/1 operate on port_ptr.
+%% -------------------------------------------------------------------------
+t_alloc_rw(_Config) ->
+    {ok, Lib} = effi_port:load("libm.so.6"),
+    Ptr = effi_port:alloc(Lib, 4),
+    ok  = effi_port:write(Ptr, int32, 42),
+    42  = effi_port:read(Ptr, int32),
+    ok  = effi_port:free(Ptr),
+    ok  = effi_port:close(Lib).
+
+%% -------------------------------------------------------------------------
+%% t_struct_rw: write two int32 fields, read back with ptr_add.
+%% -------------------------------------------------------------------------
+t_struct_rw(_Config) ->
+    {ok, Lib} = effi_port:load("libm.so.6"),
+    Ptr = effi_port:alloc(Lib, 8),
+    ok  = effi_port:write(Ptr, int32, 10),
+    P1  = effi_port:ptr_add(Ptr, 4),
+    ok  = effi_port:write(P1, int32, 20),
+    10  = effi_port:read(Ptr, int32),
+    20  = effi_port:read(P1, int32),
+    ok  = effi_port:free(Ptr),
+    ok  = effi_port:close(Lib).
+
+%% -------------------------------------------------------------------------
+%% t_array: write a double array, call cbrt on each element.
+%% -------------------------------------------------------------------------
+t_array(_Config) ->
+    {ok, Lib} = effi_port:load("libm.so.6"),
+    Vals = [1.0, 8.0, 27.0],
+    Ptr  = effi_port:alloc(Lib, 8 * length(Vals)),
+    lists:foldl(fun(V, P) ->
+        ok = effi_port:write(P, double, V),
+        effi_port:ptr_add(P, 8)
+    end, Ptr, Vals),
+    %% Read back, call cbrt, check result equals 1.0, 2.0, 3.0
+    lists:foldl(fun(Expected, P) ->
+        V    = effi_port:read(P, double),
+        {ok, Cb} = effi_port:call(Lib, "cbrt", double, [{double, V}]),
+        true = abs(Cb - Expected) < 1.0e-10,
+        effi_port:ptr_add(P, 8)
+    end, Ptr, [1.0, 2.0, 3.0]),
+    ok = effi_port:free(Ptr),
+    ok = effi_port:close(Lib).
+
+%% -------------------------------------------------------------------------
+%% t_crash_isolation: kill the port OS process — VM must survive.
+%% -------------------------------------------------------------------------
+t_crash_isolation(_Config) ->
+    {ok, Lib} = effi_port:load("libm.so.6"),
+    {port_lib, Pid, _} = Lib,
+    Port = effi_port:lib_port(Lib),
+    {os_pid, OsPid} = erlang:port_info(Port, os_pid),
+    os:cmd("kill -9 " ++ integer_to_list(OsPid)),
+    timer:sleep(200),
+    %% Next call should return an error — not crash the VM
+    Res = effi_port:call(Lib, "sqrt", double, [{double, 4.0}]),
+    true = case Res of
+               {error, _} -> true;
+               _           -> false
+           end,
+    %% Server process should be dead by now
+    false = is_process_alive(Pid),
+    ct:comment("VM survived port crash: ~p", [Res]).
