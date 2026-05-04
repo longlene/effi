@@ -1,9 +1,9 @@
-%% effi_nif.erl — NIF stub module.
+%% cffi_nif.erl — NIF stub module.
 %%
-%% Do not call these functions directly; use effi.erl instead.
-%% All real work is in c_src/effi_nif.c loaded via on_load.
+%% Do not call these functions directly; use cffi.erl instead.
+%% All real work is in c_src/cffi_nif.c loaded via on_load.
 
--module(effi_nif).
+-module(cffi_nif).
 -on_load(init/0).
 
 -export([
@@ -25,8 +25,8 @@
 ]).
 
 init() ->
-    PrivDir = code:priv_dir(effi),
-    erlang:load_nif(filename:join(PrivDir, "effi_nif"), 0).
+    PrivDir = code:priv_dir(cffi),
+    erlang:load_nif(filename:join(PrivDir, "cffi_nif"), 0).
 
 lib_open(_Path)                       -> erlang:nif_error(not_loaded).
 call(_Lib, _Fn, _Ret, _Args)          -> erlang:nif_error(not_loaded).

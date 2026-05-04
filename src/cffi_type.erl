@@ -1,4 +1,4 @@
-%% effi_type.erl — Type registry and C struct layout engine.
+%% cffi_type.erl — Type registry and C struct layout engine.
 %%
 %% Stores struct/union/enum/typedef definitions in a named ETS table.
 %% Layout (field offsets, padding, total size) is computed once at
@@ -15,7 +15,7 @@
 %%
 %% The table is created lazily on first access; no OTP application needed.
 
--module(effi_type).
+-module(cffi_type).
 
 -export([
     %% Registration
@@ -33,7 +33,7 @@
     enum_to_atom/2      %% (EnumName, Int)  -> atom() | Int
 ]).
 
--define(TABLE, effi_type_registry).
+-define(TABLE, cffi_type_registry).
 
 %% -------------------------------------------------------------------------
 %% Internal: ETS lifecycle

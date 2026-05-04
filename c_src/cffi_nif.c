@@ -1,21 +1,21 @@
 /*
- * effi_nif.c — Erlang CFFI NIF core
+ * cffi_nif.c — Erlang CFFI NIF core
  *
  * Resource types:
- *   effi_lib   dlopen handle (GC → dlclose)
- *   effi_ptr   void* wrapper (owned → GC free; borrowed → no-op)
- *              May hold a "parent" reference to an effi_cb keeping it alive.
- *   effi_cb    libffi closure + pthread sync state (GC → ffi_closure_free)
+ *   cffi_lib   dlopen handle (GC → dlclose)
+ *   cffi_ptr   void* wrapper (owned → GC free; borrowed → no-op)
+ *              May hold a "parent" reference to an cffi_cb keeping it alive.
+ *   cffi_cb    libffi closure + pthread sync state (GC → ffi_closure_free)
  *
  * Callback protocol (C→Erlang):
- *   1. effi_nif:callback_new(RetType, ArgTypes, ServerPid)
+ *   1. cffi_nif:callback_new(RetType, ArgTypes, ServerPid)
  *        → {ok, {CbHandle :: resource, FuncPtr :: resource}}
  *   2. When C calls FuncPtr, the trampoline:
  *        a. marshals C args → Erlang terms
- *        b. sends {effi_callback, CbId :: uint64, ArgList} to ServerPid
+ *        b. sends {cffi_callback, CbId :: uint64, ArgList} to ServerPid
  *        c. blocks on pthread condvar
  *   3. Server process calls Fun(Args...) and replies via:
- *        effi_nif:callback_return(CbId, RetVal)
+ *        cffi_nif:callback_return(CbId, RetVal)
  *   4. Trampoline wakes, fills C return buffer, returns to C.
  *
  * Limitation: callbacks are not re-entrant per closure instance.
@@ -42,15 +42,15 @@ static ErlNifResourceType *g_cb_rtype  = NULL;
 /* Library handle */
 typedef struct {
     void *handle;
-} effi_lib_t;
+} cffi_lib_t;
 
-/* Generic C pointer, optionally owning a "parent" effi_cb resource */
+/* Generic C pointer, optionally owning a "parent" cffi_cb resource */
 typedef struct {
     void  *ptr;
     int    owned;    /* 1 → free on GC; 0 → borrowed */
     size_t size;
-    void  *parent;   /* if non-NULL: an effi_cb_t* kept alive via enif_keep_resource */
-} effi_ptr_t;
+    void  *parent;   /* if non-NULL: an cffi_cb_t* kept alive via enif_keep_resource */
+} cffi_ptr_t;
 
 /* Callback closure + synchronization state */
 typedef struct {
@@ -61,8 +61,8 @@ typedef struct {
     unsigned        nargs;
 
     /* Type info needed by the trampoline */
-    int            *arg_tids;   /* effi_tid per arg */
-    int             ret_tid;    /* effi_tid for return */
+    int            *arg_tids;   /* cffi_tid per arg */
+    int             ret_tid;    /* cffi_tid for return */
 
     /* Erlang callback server process */
     ErlNifPid       server_pid;
@@ -72,7 +72,7 @@ typedef struct {
     pthread_cond_t  cond;
     int             waiting;    /* 1 = trampoline is blocked */
     uint8_t         ret_buf[16];/* return value written by callback_return */
-} effi_cb_t;
+} cffi_cb_t;
 
 /* =========================================================
  * Destructors
@@ -80,20 +80,20 @@ typedef struct {
 
 static void lib_dtor(ErlNifEnv *env, void *obj) {
     (void)env;
-    effi_lib_t *lib = (effi_lib_t *)obj;
+    cffi_lib_t *lib = (cffi_lib_t *)obj;
     if (lib->handle) { dlclose(lib->handle); lib->handle = NULL; }
 }
 
 static void ptr_dtor(ErlNifEnv *env, void *obj) {
     (void)env;
-    effi_ptr_t *p = (effi_ptr_t *)obj;
+    cffi_ptr_t *p = (cffi_ptr_t *)obj;
     if (p->owned && p->ptr) { free(p->ptr); p->ptr = NULL; p->owned = 0; }
     if (p->parent)          { enif_release_resource(p->parent); p->parent = NULL; }
 }
 
 static void cb_dtor(ErlNifEnv *env, void *obj) {
     (void)env;
-    effi_cb_t *cb = (effi_cb_t *)obj;
+    cffi_cb_t *cb = (cffi_cb_t *)obj;
     if (cb->closure) { ffi_closure_free(cb->closure); cb->closure = NULL; }
     free(cb->arg_types);
     free(cb->arg_tids);
@@ -113,7 +113,7 @@ static ERL_NIF_TERM am_float, am_double, am_pointer, am_string;
 static ERL_NIF_TERM am_not_found, am_bad_type, am_ffi_error;
 static ERL_NIF_TERM am_not_owner, am_alloc_failed, am_library_closed;
 static ERL_NIF_TERM am_bad_nfixed;
-static ERL_NIF_TERM am_effi_callback;   /* message tag for callbacks */
+static ERL_NIF_TERM am_cffi_callback;   /* message tag for callbacks */
 
 #define MK_ATOM(n_) am_##n_ = enif_make_atom(env, #n_)
 
@@ -133,7 +133,7 @@ static void init_atoms(ErlNifEnv *env) {
     am_not_owner      = enif_make_atom(env, "not_owner");
     am_alloc_failed   = enif_make_atom(env, "alloc_failed");
     am_library_closed = enif_make_atom(env, "library_closed");
-    am_effi_callback  = enif_make_atom(env, "effi_callback");
+    am_cffi_callback  = enif_make_atom(env, "cffi_callback");
 }
 
 /* =========================================================
@@ -151,9 +151,9 @@ typedef enum {
     T_POINTER,
     T_STRING,
     T_UNKNOWN = -1
-} effi_tid;
+} cffi_tid;
 
-static effi_tid atom_to_tid(ERL_NIF_TERM a) {
+static cffi_tid atom_to_tid(ERL_NIF_TERM a) {
     if (enif_is_identical(a, am_void))    return T_VOID;
     if (enif_is_identical(a, am_bool))    return T_BOOL;
     if (enif_is_identical(a, am_int8))    return T_INT8;
@@ -171,7 +171,7 @@ static effi_tid atom_to_tid(ERL_NIF_TERM a) {
     return T_UNKNOWN;
 }
 
-static ffi_type *tid_to_ffi(effi_tid t) {
+static ffi_type *tid_to_ffi(cffi_tid t) {
     switch (t) {
     case T_VOID:    return &ffi_type_void;
     case T_BOOL:    return &ffi_type_uint8;
@@ -191,7 +191,7 @@ static ffi_type *tid_to_ffi(effi_tid t) {
     }
 }
 
-static size_t tid_size(effi_tid t) {
+static size_t tid_size(cffi_tid t) {
     switch (t) {
     case T_VOID:              return 0;
     case T_BOOL:
@@ -216,12 +216,12 @@ static size_t tid_size(effi_tid t) {
  * For T_STRING: allocates null-terminated copy → *str_out (caller frees).
  * Returns 0 on success, -1 on type mismatch.
  */
-static int marshal_arg(ErlNifEnv *env, effi_tid tid,
+static int marshal_arg(ErlNifEnv *env, cffi_tid tid,
                        ERL_NIF_TERM val, void *dst, char **str_out) {
     ErlNifSInt64 i64;
     ErlNifUInt64 u64;
     double dbl;
-    effi_ptr_t *p;
+    cffi_ptr_t *p;
     ErlNifBinary bin;
 
     *str_out = NULL;
@@ -282,8 +282,8 @@ static int marshal_arg(ErlNifEnv *env, effi_tid tid,
 }
 
 /* marshal_ret: C value at src → Erlang term. src is a pointer to the value. */
-static ERL_NIF_TERM marshal_ret(ErlNifEnv *env, effi_tid tid, void *src) {
-    effi_ptr_t  *res;
+static ERL_NIF_TERM marshal_ret(ErlNifEnv *env, cffi_tid tid, void *src) {
+    cffi_ptr_t  *res;
     ERL_NIF_TERM bin_term;
     unsigned char *bin_data;
     char *str;
@@ -305,7 +305,7 @@ static ERL_NIF_TERM marshal_ret(ErlNifEnv *env, effi_tid tid, void *src) {
     case T_POINTER: {
         void *raw = *(void **)src;
         if (!raw) return am_null;
-        res = enif_alloc_resource(g_ptr_rtype, sizeof(effi_ptr_t));
+        res = enif_alloc_resource(g_ptr_rtype, sizeof(cffi_ptr_t));
         if (!res) return am_null;
         res->ptr = raw; res->owned = 0; res->size = 0; res->parent = NULL;
         ERL_NIF_TERM t = enif_make_resource(env, res);
@@ -332,7 +332,7 @@ static ERL_NIF_TERM nif_lib_open(ErlNifEnv *env, int argc,
                                   const ERL_NIF_TERM argv[]) {
     char path[4096];
     void *handle;
-    effi_lib_t *lib;
+    cffi_lib_t *lib;
 
     if (argc != 1) return enif_make_badarg(env);
     if (!enif_get_string(env, argv[0], path, sizeof(path), ERL_NIF_UTF8))
@@ -344,7 +344,7 @@ static ERL_NIF_TERM nif_lib_open(ErlNifEnv *env, int argc,
         return enif_make_tuple2(env, am_error,
             enif_make_string(env, dlerror() ?: "unknown", ERL_NIF_UTF8));
 
-    lib = enif_alloc_resource(g_lib_rtype, sizeof(effi_lib_t));
+    lib = enif_alloc_resource(g_lib_rtype, sizeof(cffi_lib_t));
     if (!lib) { dlclose(handle); return enif_make_tuple2(env, am_error, am_alloc_failed); }
     lib->handle = handle;
 
@@ -360,10 +360,10 @@ static ERL_NIF_TERM nif_lib_open(ErlNifEnv *env, int argc,
  * ========================================================= */
 static ERL_NIF_TERM nif_call(ErlNifEnv *env, int argc,
                               const ERL_NIF_TERM argv[]) {
-    effi_lib_t *lib;
+    cffi_lib_t *lib;
     char func_name[512];
     void *fn_ptr;
-    effi_tid ret_tid;
+    cffi_tid ret_tid;
     unsigned nargs = 0;
     ERL_NIF_TERM list, head, tail;
     ERL_NIF_TERM result = am_error;
@@ -422,7 +422,7 @@ static ERL_NIF_TERM nif_call(ErlNifEnv *env, int argc,
           if (!enif_get_tuple(env, head, &ar, &pair) || ar != 2) {
               result = enif_make_badarg(env); goto cleanup;
           }
-          effi_tid tid = atom_to_tid(pair[0]);
+          cffi_tid tid = atom_to_tid(pair[0]);
           if (tid == T_UNKNOWN || tid == T_VOID) {
               result = enif_make_tuple2(env, am_error,
                   enif_make_tuple2(env, am_bad_type, pair[0]));
@@ -473,10 +473,10 @@ cleanup:
  * ========================================================= */
 static ERL_NIF_TERM nif_call_va(ErlNifEnv *env, int argc,
                                  const ERL_NIF_TERM argv[]) {
-    effi_lib_t *lib;
+    cffi_lib_t *lib;
     char func_name[512];
     void *fn_ptr;
-    effi_tid ret_tid;
+    cffi_tid ret_tid;
     unsigned nfixed = 0, nargs = 0;
     ERL_NIF_TERM list, head, tail;
     ERL_NIF_TERM result = am_error;
@@ -542,7 +542,7 @@ static ERL_NIF_TERM nif_call_va(ErlNifEnv *env, int argc,
           if (!enif_get_tuple(env, head, &ar, &pair) || ar != 2) {
               result = enif_make_badarg(env); goto va_cleanup;
           }
-          effi_tid tid = atom_to_tid(pair[0]);
+          cffi_tid tid = atom_to_tid(pair[0]);
           if (tid == T_UNKNOWN || tid == T_VOID) {
               result = enif_make_tuple2(env, am_error,
                   enif_make_tuple2(env, am_bad_type, pair[0]));
@@ -591,13 +591,13 @@ va_cleanup:
 static ERL_NIF_TERM nif_mem_alloc(ErlNifEnv *env, int argc,
                                    const ERL_NIF_TERM argv[]) {
     ErlNifUInt64 size;
-    effi_ptr_t  *p;
+    cffi_ptr_t  *p;
 
     if (argc != 1) return enif_make_badarg(env);
     if (!enif_get_uint64(env, argv[0], &size) || size == 0)
         return enif_make_badarg(env);
 
-    p = enif_alloc_resource(g_ptr_rtype, sizeof(effi_ptr_t));
+    p = enif_alloc_resource(g_ptr_rtype, sizeof(cffi_ptr_t));
     if (!p) return enif_make_tuple2(env, am_error, am_alloc_failed);
     p->ptr = calloc(1, (size_t)size);
     if (!p->ptr) {
@@ -616,7 +616,7 @@ static ERL_NIF_TERM nif_mem_alloc(ErlNifEnv *env, int argc,
  * ========================================================= */
 static ERL_NIF_TERM nif_mem_free(ErlNifEnv *env, int argc,
                                   const ERL_NIF_TERM argv[]) {
-    effi_ptr_t *p;
+    cffi_ptr_t *p;
     if (argc != 1) return enif_make_badarg(env);
     if (!enif_get_resource(env, argv[0], g_ptr_rtype, (void **)&p))
         return enif_make_badarg(env);
@@ -633,8 +633,8 @@ static ERL_NIF_TERM nif_mem_free(ErlNifEnv *env, int argc,
  * ========================================================= */
 static ERL_NIF_TERM nif_mem_read(ErlNifEnv *env, int argc,
                                   const ERL_NIF_TERM argv[]) {
-    effi_ptr_t *p;
-    effi_tid tid;
+    cffi_ptr_t *p;
+    cffi_tid tid;
 
     if (argc != 2) return enif_make_badarg(env);
     if (!enif_get_resource(env, argv[0], g_ptr_rtype, (void **)&p))
@@ -655,8 +655,8 @@ static ERL_NIF_TERM nif_mem_read(ErlNifEnv *env, int argc,
  * ========================================================= */
 static ERL_NIF_TERM nif_mem_write(ErlNifEnv *env, int argc,
                                    const ERL_NIF_TERM argv[]) {
-    effi_ptr_t *p;
-    effi_tid tid;
+    cffi_ptr_t *p;
+    cffi_tid tid;
 
     if (argc != 3) return enif_make_badarg(env);
     if (!enif_get_resource(env, argv[0], g_ptr_rtype, (void **)&p))
@@ -687,7 +687,7 @@ static ERL_NIF_TERM nif_mem_write(ErlNifEnv *env, int argc,
         if (enif_is_identical(val, am_null)) {
             raw = NULL;
         } else {
-            effi_ptr_t *src_p;
+            cffi_ptr_t *src_p;
             if (!enif_get_resource(env, val, g_ptr_rtype, (void **)&src_p))
                 return enif_make_badarg(env);
             raw = src_p->ptr;
@@ -711,7 +711,7 @@ static ERL_NIF_TERM nif_mem_write(ErlNifEnv *env, int argc,
  * ========================================================= */
 static ERL_NIF_TERM nif_mem_read_bytes(ErlNifEnv *env, int argc,
                                         const ERL_NIF_TERM argv[]) {
-    effi_ptr_t  *p;
+    cffi_ptr_t  *p;
     ErlNifUInt64 size;
     ERL_NIF_TERM bin_term;
     unsigned char *data;
@@ -730,7 +730,7 @@ static ERL_NIF_TERM nif_mem_read_bytes(ErlNifEnv *env, int argc,
 
 static ERL_NIF_TERM nif_mem_write_bytes(ErlNifEnv *env, int argc,
                                          const ERL_NIF_TERM argv[]) {
-    effi_ptr_t *p;
+    cffi_ptr_t *p;
     ErlNifBinary bin;
 
     if (argc != 2) return enif_make_badarg(env);
@@ -749,7 +749,7 @@ static ERL_NIF_TERM nif_mem_write_bytes(ErlNifEnv *env, int argc,
  * ========================================================= */
 static ERL_NIF_TERM nif_ptr_add(ErlNifEnv *env, int argc,
                                  const ERL_NIF_TERM argv[]) {
-    effi_ptr_t *p, *newp;
+    cffi_ptr_t *p, *newp;
     ErlNifSInt64 offset;
 
     if (argc != 2) return enif_make_badarg(env);
@@ -759,7 +759,7 @@ static ERL_NIF_TERM nif_ptr_add(ErlNifEnv *env, int argc,
         return enif_make_badarg(env);
     if (!p->ptr) return enif_make_tuple2(env, am_error, am_null);
 
-    newp = enif_alloc_resource(g_ptr_rtype, sizeof(effi_ptr_t));
+    newp = enif_alloc_resource(g_ptr_rtype, sizeof(cffi_ptr_t));
     if (!newp) return enif_make_tuple2(env, am_error, am_alloc_failed);
     newp->ptr    = (uint8_t *)p->ptr + offset;
     newp->owned  = 0;
@@ -774,7 +774,7 @@ static ERL_NIF_TERM nif_ptr_add(ErlNifEnv *env, int argc,
 static ERL_NIF_TERM nif_ptr_null(ErlNifEnv *env, int argc,
                                   const ERL_NIF_TERM argv[]) {
     (void)argc; (void)argv;
-    effi_ptr_t *p = enif_alloc_resource(g_ptr_rtype, sizeof(effi_ptr_t));
+    cffi_ptr_t *p = enif_alloc_resource(g_ptr_rtype, sizeof(cffi_ptr_t));
     if (!p) return enif_make_tuple2(env, am_error, am_alloc_failed);
     p->ptr = NULL; p->owned = 0; p->size = 0; p->parent = NULL;
     ERL_NIF_TERM res = enif_make_resource(env, p);
@@ -784,7 +784,7 @@ static ERL_NIF_TERM nif_ptr_null(ErlNifEnv *env, int argc,
 
 static ERL_NIF_TERM nif_ptr_is_null(ErlNifEnv *env, int argc,
                                      const ERL_NIF_TERM argv[]) {
-    effi_ptr_t *p;
+    cffi_ptr_t *p;
     if (argc != 1) return enif_make_badarg(env);
     if (!enif_get_resource(env, argv[0], g_ptr_rtype, (void **)&p))
         return enif_make_badarg(env);
@@ -793,7 +793,7 @@ static ERL_NIF_TERM nif_ptr_is_null(ErlNifEnv *env, int argc,
 
 static ERL_NIF_TERM nif_type_size(ErlNifEnv *env, int argc,
                                    const ERL_NIF_TERM argv[]) {
-    effi_tid tid;
+    cffi_tid tid;
     if (argc != 1) return enif_make_badarg(env);
     tid = atom_to_tid(argv[0]);
     if (tid == T_UNKNOWN)
@@ -806,12 +806,12 @@ static ERL_NIF_TERM nif_type_size(ErlNifEnv *env, int argc,
  * Callback: trampoline (called by C code via the function pointer)
  *
  * Runs in whatever thread made the C call (typically a dirty NIF thread).
- * Sends {effi_callback, CbId, [Arg...]} to the server process,
+ * Sends {cffi_callback, CbId, [Arg...]} to the server process,
  * then blocks until callback_return is called.
  * ========================================================= */
 static void callback_trampoline(ffi_cif *cif, void *ret,
                                  void **args, void *user_data) {
-    effi_cb_t *cb = (effi_cb_t *)user_data;
+    cffi_cb_t *cb = (cffi_cb_t *)user_data;
     (void)cif;
 
     /* Build Erlang arg list in a fresh message env */
@@ -819,14 +819,14 @@ static void callback_trampoline(ffi_cif *cif, void *ret,
 
     ERL_NIF_TERM arg_list = enif_make_list(msg_env, 0);
     for (int i = (int)cb->nargs - 1; i >= 0; i--) {
-        ERL_NIF_TERM t = marshal_ret(msg_env, (effi_tid)cb->arg_tids[i], args[i]);
+        ERL_NIF_TERM t = marshal_ret(msg_env, (cffi_tid)cb->arg_tids[i], args[i]);
         arg_list = enif_make_list_cell(msg_env, t, arg_list);
     }
 
     /* CbId is the raw pointer as uint64 — used by callback_return to find us */
     uint64_t cb_id = (uint64_t)(uintptr_t)cb;
     ERL_NIF_TERM msg = enif_make_tuple3(msg_env,
-        am_effi_callback,
+        am_cffi_callback,
         enif_make_uint64(msg_env, cb_id),
         arg_list);
 
@@ -844,7 +844,7 @@ static void callback_trampoline(ffi_cif *cif, void *ret,
         pthread_cond_wait(&cb->cond, &cb->lock);
 
     /* Copy return value into C's return buffer */
-    size_t rsz = tid_size((effi_tid)cb->ret_tid);
+    size_t rsz = tid_size((cffi_tid)cb->ret_tid);
     if (rsz > 0) memcpy(ret, cb->ret_buf, rsz);
 
     pthread_mutex_unlock(&cb->lock);
@@ -857,10 +857,10 @@ static void callback_trampoline(ffi_cif *cif, void *ret,
  * ========================================================= */
 static ERL_NIF_TERM nif_callback_new(ErlNifEnv *env, int argc,
                                       const ERL_NIF_TERM argv[]) {
-    effi_tid ret_tid;
+    cffi_tid ret_tid;
     ErlNifPid pid;
-    effi_cb_t *cb = NULL;
-    effi_ptr_t *ptr_res = NULL;
+    cffi_cb_t *cb = NULL;
+    cffi_ptr_t *ptr_res = NULL;
     unsigned nargs = 0;
     ERL_NIF_TERM list, head, tail;
 
@@ -875,9 +875,9 @@ static ERL_NIF_TERM nif_callback_new(ErlNifEnv *env, int argc,
       while (enif_get_list_cell(env, t, &head, &tail)) { nargs++; t = tail; }
       if (!enif_is_empty_list(env, t)) return enif_make_badarg(env); }
 
-    cb = enif_alloc_resource(g_cb_rtype, sizeof(effi_cb_t));
+    cb = enif_alloc_resource(g_cb_rtype, sizeof(cffi_cb_t));
     if (!cb) return enif_make_tuple2(env, am_error, am_alloc_failed);
-    memset(cb, 0, sizeof(effi_cb_t));
+    memset(cb, 0, sizeof(cffi_cb_t));
 
     cb->ret_tid    = (int)ret_tid;
     cb->nargs      = nargs;
@@ -891,7 +891,7 @@ static ERL_NIF_TERM nif_callback_new(ErlNifEnv *env, int argc,
     /* Parse arg types */
     { unsigned i = 0; ERL_NIF_TERM t = list;
       while (enif_get_list_cell(env, t, &head, &tail)) {
-          effi_tid tid = atom_to_tid(head);
+          cffi_tid tid = atom_to_tid(head);
           if (tid == T_UNKNOWN || tid == T_VOID) goto fail;
           cb->arg_tids[i]  = (int)tid;
           cb->arg_types[i] = tid_to_ffi(tid);
@@ -916,10 +916,10 @@ static ERL_NIF_TERM nif_callback_new(ErlNifEnv *env, int argc,
 
     /*
      * Build FuncPtr resource.
-     * The ptr_res->parent = cb keeps the effi_cb_t alive as long as
+     * The ptr_res->parent = cb keeps the cffi_cb_t alive as long as
      * the FuncPtr resource is alive (ptr_dtor calls enif_release_resource).
      */
-    ptr_res = enif_alloc_resource(g_ptr_rtype, sizeof(effi_ptr_t));
+    ptr_res = enif_alloc_resource(g_ptr_rtype, sizeof(cffi_ptr_t));
     if (!ptr_res) goto fail;
     ptr_res->ptr    = cb->code_ptr;
     ptr_res->owned  = 0;
@@ -955,19 +955,19 @@ fail:
 static ERL_NIF_TERM nif_callback_return(ErlNifEnv *env, int argc,
                                          const ERL_NIF_TERM argv[]) {
     ErlNifUInt64 cb_id;
-    effi_cb_t *cb;
+    cffi_cb_t *cb;
     char *str_buf = NULL;
 
     if (argc != 2) return enif_make_badarg(env);
     if (!enif_get_uint64(env, argv[0], &cb_id)) return enif_make_badarg(env);
 
-    cb = (effi_cb_t *)(uintptr_t)cb_id;
+    cb = (cffi_cb_t *)(uintptr_t)cb_id;
 
     pthread_mutex_lock(&cb->lock);
 
     memset(cb->ret_buf, 0, sizeof(cb->ret_buf));
     /* Ignore marshal errors — just leave ret_buf zeroed (safe default) */
-    marshal_arg(env, (effi_tid)cb->ret_tid, argv[1], cb->ret_buf, &str_buf);
+    marshal_arg(env, (cffi_tid)cb->ret_tid, argv[1], cb->ret_buf, &str_buf);
     if (str_buf) free(str_buf);
 
     cb->waiting = 0;
@@ -1006,15 +1006,15 @@ static int on_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
 
     init_atoms(env);
 
-    g_lib_rtype = enif_open_resource_type(env, NULL, "effi_lib", lib_dtor,
+    g_lib_rtype = enif_open_resource_type(env, NULL, "cffi_lib", lib_dtor,
                       ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);
     if (!g_lib_rtype) return -1;
 
-    g_ptr_rtype = enif_open_resource_type(env, NULL, "effi_ptr", ptr_dtor,
+    g_ptr_rtype = enif_open_resource_type(env, NULL, "cffi_ptr", ptr_dtor,
                       ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);
     if (!g_ptr_rtype) return -1;
 
-    g_cb_rtype  = enif_open_resource_type(env, NULL, "effi_cb",  cb_dtor,
+    g_cb_rtype  = enif_open_resource_type(env, NULL, "cffi_cb",  cb_dtor,
                       ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);
     if (!g_cb_rtype) return -1;
 
@@ -1027,4 +1027,4 @@ static int on_upgrade(ErlNifEnv *env, void **priv, void **old_priv,
     return on_load(env, priv, info);
 }
 
-ERL_NIF_INIT(effi_nif, nif_funcs, on_load, NULL, on_upgrade, NULL)
+ERL_NIF_INIT(cffi_nif, nif_funcs, on_load, NULL, on_upgrade, NULL)

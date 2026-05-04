@@ -1,28 +1,28 @@
-%% effi_port.erl — Port-safe CFFI: C code runs in a separate OS process.
+%% cffi_port.erl — Port-safe CFFI: C code runs in a separate OS process.
 %%
-%% API mirrors effi.erl. Use this when safety > speed:
+%% API mirrors cffi.erl. Use this when safety > speed:
 %% a crash in the C library kills the port process, not the BEAM VM.
 %%
 %% Quick start:
 %%
-%%   {ok, Lib} = effi_port:load("libm.so.6"),
-%%   {ok, 2.0} = effi_port:call(Lib, "sqrt", double, [{double, 4.0}]),
+%%   {ok, Lib} = cffi_port:load("libm.so.6"),
+%%   {ok, 2.0} = cffi_port:call(Lib, "sqrt", double, [{double, 4.0}]),
 %%
-%%   Ptr = effi_port:alloc(Lib, 16),
-%%   ok  = effi_port:write(Ptr, int32, 42),
-%%   42  = effi_port:read(Ptr, int32),
-%%   ok  = effi_port:free(Ptr).
+%%   Ptr = cffi_port:alloc(Lib, 16),
+%%   ok  = cffi_port:write(Ptr, int32, 42),
+%%   42  = cffi_port:read(Ptr, int32),
+%%   ok  = cffi_port:free(Ptr).
 %%
-%% Key differences from effi.erl:
+%% Key differences from cffi.erl:
 %%   - alloc/2 takes the Lib handle (to know which port process to use)
 %%   - Pointers are {port_ptr, Pid, Addr} — opaque, not NIF resources
 %%   - Library handles are {port_lib, Pid, Handle} tuples
-%%   - One OS process per effi_port:load/1 call (isolated per library)
+%%   - One OS process per cffi_port:load/1 call (isolated per library)
 %%   - If the port crashes: call returns {error, port_crashed}
 %%
-%% Type resolution (enum/typedef) is handled the same as effi.erl via effi_type.
+%% Type resolution (enum/typedef) is handled the same as cffi.erl via cffi_type.
 
--module(effi_port).
+-module(cffi_port).
 -behaviour(gen_server).
 
 %% Public API
@@ -47,7 +47,7 @@
          terminate/2, code_change/3]).
 
 %% -------------------------------------------------------------------------
-%% Wire protocol constants (must match effi_port.c)
+%% Wire protocol constants (must match cffi_port.c)
 %% -------------------------------------------------------------------------
 
 -define(OP_LOAD_LIB,    1).
@@ -171,11 +171,11 @@ alloc_type(Lib, Type) -> alloc_type(Lib, Type, 1).
 
 -spec alloc_type(port_lib(), term(), pos_integer()) -> port_ptr().
 alloc_type(Lib, Type, Count) ->
-    alloc(Lib, effi_type:sizeof(Type) * Count).
+    alloc(Lib, cffi_type:sizeof(Type) * Count).
 
 -spec alloc_struct(port_lib(), atom()) -> port_ptr().
 alloc_struct(Lib, StructName) ->
-    alloc(Lib, effi_type:sizeof(StructName)).
+    alloc(Lib, cffi_type:sizeof(StructName)).
 
 -spec free(port_ptr()) -> ok.
 free({port_ptr, Pid, Addr}) ->
@@ -183,7 +183,7 @@ free({port_ptr, Pid, Addr}) ->
 
 -spec read(port_ptr(), term()) -> term().
 read({port_ptr, Pid, Addr} = Ptr, Type) ->
-    case effi_type:lookup(resolve_typedef(Type)) of
+    case cffi_type:lookup(resolve_typedef(Type)) of
         not_found ->
             {ok, Val} = gen_server:call(Pid, {read, Addr, type_code(Type)}, 10000),
             Val;
@@ -197,7 +197,7 @@ read({port_ptr, Pid, Addr} = Ptr, Type) ->
 
 -spec write(port_ptr(), term(), term()) -> ok.
 write({port_ptr, Pid, Addr} = Ptr, Type, Value) ->
-    case effi_type:lookup(resolve_typedef(Type)) of
+    case cffi_type:lookup(resolve_typedef(Type)) of
         not_found ->
             gen_server:call(Pid, {write, Addr, type_code(Type), Value}, 10000);
         {enum, ToInt, _} ->
@@ -235,26 +235,26 @@ is_null({port_ptr, _, 0})   -> true;
 is_null({port_ptr, _, _})   -> false.
 
 %% -------------------------------------------------------------------------
-%% Struct / union field access  (same logic as effi.erl, uses local ops)
+%% Struct / union field access  (same logic as cffi.erl, uses local ops)
 %% -------------------------------------------------------------------------
 
 -spec field_ptr(port_ptr(), atom(), atom()) -> port_ptr().
 field_ptr(Ptr, TypeName, FieldName) ->
-    case effi_type:field_info(TypeName, FieldName) of
+    case cffi_type:field_info(TypeName, FieldName) of
         {_Type, Offset} -> ptr_add(Ptr, Offset);
         not_found       -> error({unknown_field, TypeName, FieldName})
     end.
 
 -spec struct_read(port_ptr(), atom(), atom()) -> term().
 struct_read(Ptr, TypeName, FieldName) ->
-    case effi_type:field_info(TypeName, FieldName) of
+    case cffi_type:field_info(TypeName, FieldName) of
         {FType, Offset} -> read(ptr_add(Ptr, Offset), FType);
         not_found       -> error({unknown_field, TypeName, FieldName})
     end.
 
 -spec struct_write(port_ptr(), atom(), atom(), term()) -> ok.
 struct_write(Ptr, TypeName, FieldName, Value) ->
-    case effi_type:field_info(TypeName, FieldName) of
+    case cffi_type:field_info(TypeName, FieldName) of
         {FType, Offset} -> write(ptr_add(Ptr, Offset), FType, Value);
         not_found       -> error({unknown_field, TypeName, FieldName})
     end.
@@ -281,7 +281,7 @@ map_to_struct(Ptr, TypeName, Map) ->
 
 -spec array_ptr(port_ptr(), term(), non_neg_integer()) -> port_ptr().
 array_ptr(Ptr, ElemType, Index) ->
-    ptr_add(Ptr, effi_type:sizeof(ElemType) * Index).
+    ptr_add(Ptr, cffi_type:sizeof(ElemType) * Index).
 
 -spec array_read(port_ptr(), term(), non_neg_integer()) -> term().
 array_read(Ptr, ElemType, Index) ->
@@ -304,15 +304,15 @@ with_alloc(Lib, Bytes, Fun) ->
 
 -spec with_alloc(port_lib(), term(), pos_integer(), fun((port_ptr()) -> R)) -> R.
 with_alloc(Lib, Type, Count, Fun) ->
-    with_alloc(Lib, effi_type:sizeof(Type) * Count, Fun).
+    with_alloc(Lib, cffi_type:sizeof(Type) * Count, Fun).
 
 %% -------------------------------------------------------------------------
 %% gen_server callbacks
 %% -------------------------------------------------------------------------
 
 init([]) ->
-    PrivDir = code:priv_dir(effi),
-    Exe = filename:join(PrivDir, "effi_port"),
+    PrivDir = code:priv_dir(cffi),
+    Exe = filename:join(PrivDir, "cffi_port"),
     Port = open_port({spawn_executable, Exe},
                      [{packet, 4}, binary, exit_status, use_stdio]),
     {ok, #state{port = Port, seq = 0, waiting = undefined}}.
@@ -494,7 +494,7 @@ decode_typed(?PT_STRING,  <<Len:32/unsigned-big, Data:Len/bytes, _/binary>>) -> 
 decode_typed(_, _)                                                  -> undefined.
 
 %% -------------------------------------------------------------------------
-%% Type helpers (enum/typedef resolution, same logic as effi.erl)
+%% Type helpers (enum/typedef resolution, same logic as cffi.erl)
 %% -------------------------------------------------------------------------
 
 type_code(void)    -> ?PT_VOID;
@@ -512,14 +512,14 @@ type_code(double)  -> ?PT_DOUBLE;
 type_code(pointer) -> ?PT_POINTER;
 type_code(string)  -> ?PT_STRING;
 type_code(T) ->
-    case effi_type:lookup(T) of
+    case cffi_type:lookup(T) of
         {enum, _, _}    -> ?PT_INT32;
         {typedef, Inner} -> type_code(Inner);
         _               -> ?PT_POINTER   %% structs/unions passed as pointer
     end.
 
 resolve_typedef(T) when is_atom(T) ->
-    case effi_type:lookup(T) of
+    case cffi_type:lookup(T) of
         {typedef, Inner} -> resolve_typedef(Inner);
         _                -> T
     end;
@@ -528,7 +528,7 @@ resolve_typedef(T) -> T.
 resolve_type(Type) ->
     case resolve_typedef(Type) of
         T when is_atom(T) ->
-            case effi_type:lookup(T) of
+            case cffi_type:lookup(T) of
                 {enum, _, _}     -> int32;
                 {typedef, Inner} -> resolve_type(Inner);
                 _                -> T
@@ -538,7 +538,7 @@ resolve_type(Type) ->
 
 resolve_arg({Type, Value}) ->
     NifType = resolve_type(Type),
-    NifVal  = case effi_type:lookup(resolve_typedef(Type)) of
+    NifVal  = case cffi_type:lookup(resolve_typedef(Type)) of
         {enum, ToInt, _} when is_atom(Value) ->
             case maps:find(Value, ToInt) of
                 {ok, V} -> V;
@@ -549,7 +549,7 @@ resolve_arg({Type, Value}) ->
     {NifType, NifVal}.
 
 unmarshal_ret(Pid, RetType, Val) ->
-    case effi_type:lookup(resolve_typedef(RetType)) of
+    case cffi_type:lookup(resolve_typedef(RetType)) of
         {enum, _, ToAtom} when is_integer(Val) ->
             maps:get(Val, ToAtom, Val);
         {typedef, Inner} ->
@@ -563,7 +563,7 @@ unmarshal_ret(Pid, RetType, Val) ->
     end.
 
 struct_fields(TypeName) ->
-    case effi_type:lookup(TypeName) of
+    case cffi_type:lookup(TypeName) of
         {struct, _, _, Fields} -> Fields;
         {union,  _, _, Fields} -> Fields;
         not_found -> error({unknown_type, TypeName})

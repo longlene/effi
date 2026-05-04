@@ -1,7 +1,7 @@
-%% effi.hrl - Type atom shorthands (optional convenience, all atoms work directly)
+%% cffi.hrl - Type atom shorthands (optional convenience, all atoms work directly)
 
--ifndef(EFFI_HRL).
--define(EFFI_HRL, true).
+-ifndef(CFFI_HRL).
+-define(CFFI_HRL, true).
 
 %% Primitive C types
 -define(void,    void).
@@ -19,6 +19,6 @@
 -define(string,  string).   %% char* <-> binary()
 
 %% Convenience: call with no args
--define(effi_call(Lib, Func, Ret), effi:call(Lib, Func, Ret, [])).
+-define(cffi_call(Lib, Func, Ret), cffi:call(Lib, Func, Ret, [])).
 
 -endif.

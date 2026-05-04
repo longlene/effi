@@ -1,4 +1,4 @@
-c_src/effi_nif.o: c_src/effi_nif.c \
+c_src/cffi_nif.o: c_src/cffi_nif.c \
  /usr/lib64/erlang/erts-16.2/include/erl_nif.h \
  /usr/lib64/erlang/erts-16.2/include/erl_drv_nif.h \
  /usr/lib64/erlang/erts-16.2/include/erl_int_sizes_config.h \

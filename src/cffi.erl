@@ -1,18 +1,18 @@
-%% effi.erl — Erlang CFFI public API
+%% cffi.erl — Erlang CFFI public API
 %%
 %% Quick start:
 %%
 %%   %% Primitive call
-%%   {ok, Lib} = effi:load("libm.so.6"),
-%%   {ok, 2.0} = effi:call(Lib, "sqrt", double, [{double, 4.0}]),
+%%   {ok, Lib} = cffi:load("libm.so.6"),
+%%   {ok, 2.0} = cffi:call(Lib, "sqrt", double, [{double, 4.0}]),
 %%
 %%   %% Define a struct, allocate, read/write fields
-%%   effi:defcstruct(point, [{x, double}, {y, double}]),
-%%   Ptr = effi:alloc_struct(point),
-%%   effi:struct_write(Ptr, point, x, 1.5),
-%%   effi:struct_write(Ptr, point, y, 2.5),
-%%   #{x := 1.5, y := 2.5} = effi:struct_to_map(Ptr, point),
-%%   effi:free(Ptr).
+%%   cffi:defcstruct(point, [{x, double}, {y, double}]),
+%%   Ptr = cffi:alloc_struct(point),
+%%   cffi:struct_write(Ptr, point, x, 1.5),
+%%   cffi:struct_write(Ptr, point, y, 2.5),
+%%   #{x := 1.5, y := 2.5} = cffi:struct_to_map(Ptr, point),
+%%   cffi:free(Ptr).
 %%
 %% Type specs:
 %%   Primitive : void | bool | int8 | uint8 | int16 | uint16
@@ -21,13 +21,13 @@
 %%   Composite : {array, ElemType, N} | {ptr, PointeeType}
 %%             | RegisteredName
 
--module(effi).
+-module(cffi).
 
 -export([
     %% Library
     load/1,
 
-    %% Type definitions (delegated to effi_type)
+    %% Type definitions (delegated to cffi_type)
     defcstruct/2,
     defcunion/2,
     defcenum/2,
@@ -80,16 +80,16 @@
 %% -------------------------------------------------------------------------
 
 -spec defcstruct(atom(), [{atom(), term()}]) -> ok.
-defcstruct(Name, Fields) -> effi_type:defcstruct(Name, Fields).
+defcstruct(Name, Fields) -> cffi_type:defcstruct(Name, Fields).
 
 -spec defcunion(atom(), [{atom(), term()}]) -> ok.
-defcunion(Name, Fields) -> effi_type:defcunion(Name, Fields).
+defcunion(Name, Fields) -> cffi_type:defcunion(Name, Fields).
 
 -spec defcenum(atom(), list()) -> ok.
-defcenum(Name, Values) -> effi_type:defcenum(Name, Values).
+defcenum(Name, Values) -> cffi_type:defcenum(Name, Values).
 
 -spec defctype(atom(), term()) -> ok.
-defctype(Name, TypeSpec) -> effi_type:defctype(Name, TypeSpec).
+defctype(Name, TypeSpec) -> cffi_type:defctype(Name, TypeSpec).
 
 %% -------------------------------------------------------------------------
 %% Library loading
@@ -97,7 +97,7 @@ defctype(Name, TypeSpec) -> effi_type:defctype(Name, TypeSpec).
 
 -spec load(string() | binary()) -> {ok, reference()} | {error, term()}.
 load(Path) ->
-    effi_nif:lib_open(to_list(Path)).
+    cffi_nif:lib_open(to_list(Path)).
 
 %% -------------------------------------------------------------------------
 %% Calling C functions
@@ -115,7 +115,7 @@ call(Lib, Func, RetType) ->
 call(Lib, Func, RetType, Args) ->
     NifRetType = resolve_type_for_nif(RetType),
     NifArgs = [resolve_arg_for_nif(A) || A <- Args],
-    case effi_nif:call(Lib, to_list(Func), NifRetType, NifArgs) of
+    case cffi_nif:call(Lib, to_list(Func), NifRetType, NifArgs) of
         {ok, Val} -> {ok, unmarshal_ret(RetType, Val)};
         Err       -> Err
     end.
@@ -127,7 +127,7 @@ call(Lib, Func, RetType, Args) ->
 %%   Variadic float args are automatically promoted to double per C rules.
 %%
 %%   Example:
-%%     {ok, N} = effi:call_va(Lib, "snprintf", int32, 3,
+%%     {ok, N} = cffi:call_va(Lib, "snprintf", int32, 3,
 %%                 [{pointer, Buf}, {uint64, BufSize},
 %%                  {string, "x=%d y=%.2f"},
 %%                  {int32, 42}, {double, 3.14}])
@@ -136,7 +136,7 @@ call(Lib, Func, RetType, Args) ->
 call_va(Lib, Func, RetType, NFixed, Args) ->
     NifRetType = resolve_type_for_nif(RetType),
     NifArgs    = [resolve_arg_for_nif(A) || A <- Args],
-    case effi_nif:call_va(Lib, to_list(Func), NifRetType, NFixed, NifArgs) of
+    case cffi_nif:call_va(Lib, to_list(Func), NifRetType, NFixed, NifArgs) of
         {ok, Val} -> {ok, unmarshal_ret(RetType, Val)};
         Err       -> Err
     end.
@@ -147,22 +147,22 @@ call_va(Lib, Func, RetType, NFixed, Args) ->
 
 -spec alloc(pos_integer()) -> reference().
 alloc(Bytes) when is_integer(Bytes), Bytes > 0 ->
-    effi_nif:mem_alloc(Bytes).
+    cffi_nif:mem_alloc(Bytes).
 
 -spec alloc_type(term()) -> reference().
 alloc_type(Type) -> alloc_type(Type, 1).
 
 -spec alloc_type(term(), pos_integer()) -> reference().
 alloc_type(Type, Count) when is_integer(Count), Count > 0 ->
-    effi_nif:mem_alloc(effi_type:sizeof(Type) * Count).
+    cffi_nif:mem_alloc(cffi_type:sizeof(Type) * Count).
 
 -spec alloc_struct(atom()) -> reference().
 alloc_struct(StructName) ->
-    effi_nif:mem_alloc(effi_type:sizeof(StructName)).
+    cffi_nif:mem_alloc(cffi_type:sizeof(StructName)).
 
 -spec free(reference()) -> ok | {error, term()}.
 free(Ptr) ->
-    effi_nif:mem_free(Ptr).
+    cffi_nif:mem_free(Ptr).
 
 %% -------------------------------------------------------------------------
 %% Raw memory read / write
@@ -177,11 +177,11 @@ free(Ptr) ->
 
 -spec read(reference(), term()) -> term().
 read(Ptr, Type) ->
-    case effi_type:lookup(resolve_typedef(Type)) of
+    case cffi_type:lookup(resolve_typedef(Type)) of
         not_found ->
-            effi_nif:mem_read(Ptr, primitive_type(Type));
+            cffi_nif:mem_read(Ptr, primitive_type(Type));
         {enum, _, ToAtom} ->
-            Int = effi_nif:mem_read(Ptr, int32),
+            Int = cffi_nif:mem_read(Ptr, int32),
             maps:get(Int, ToAtom, Int);
         {struct, _, _, _} ->
             Ptr;    %% return pointer to the sub-struct
@@ -193,9 +193,9 @@ read(Ptr, Type) ->
 
 -spec write(reference(), term(), term()) -> ok | {error, term()}.
 write(Ptr, Type, Value) ->
-    case effi_type:lookup(resolve_typedef(Type)) of
+    case cffi_type:lookup(resolve_typedef(Type)) of
         not_found ->
-            effi_nif:mem_write(Ptr, primitive_type(Type), Value);
+            cffi_nif:mem_write(Ptr, primitive_type(Type), Value);
         {enum, ToInt, _} ->
             Int = case Value of
                 A when is_atom(A) ->
@@ -205,16 +205,16 @@ write(Ptr, Type, Value) ->
                     end;
                 N when is_integer(N) -> N
             end,
-            effi_nif:mem_write(Ptr, int32, Int);
+            cffi_nif:mem_write(Ptr, int32, Int);
         {typedef, Inner} ->
             write(Ptr, Inner, Value)
     end.
 
 -spec read_bytes(reference(), pos_integer()) -> binary().
-read_bytes(Ptr, Size) -> effi_nif:mem_read_bytes(Ptr, Size).
+read_bytes(Ptr, Size) -> cffi_nif:mem_read_bytes(Ptr, Size).
 
 -spec write_bytes(reference(), binary()) -> ok.
-write_bytes(Ptr, Bytes) -> effi_nif:mem_write_bytes(Ptr, Bytes).
+write_bytes(Ptr, Bytes) -> cffi_nif:mem_write_bytes(Ptr, Bytes).
 
 %% -------------------------------------------------------------------------
 %% Struct / union field access
@@ -223,16 +223,16 @@ write_bytes(Ptr, Bytes) -> effi_nif:mem_write_bytes(Ptr, Bytes).
 %% Return a borrowed pointer to a named field within a struct/union.
 -spec field_ptr(reference(), atom(), atom()) -> reference().
 field_ptr(Ptr, TypeName, FieldName) ->
-    case effi_type:field_info(TypeName, FieldName) of
-        {_Type, Offset} -> effi_nif:ptr_add(Ptr, Offset);
+    case cffi_type:field_info(TypeName, FieldName) of
+        {_Type, Offset} -> cffi_nif:ptr_add(Ptr, Offset);
         not_found       -> error({unknown_field, TypeName, FieldName})
     end.
 
 -spec struct_read(reference(), atom(), atom()) -> term().
 struct_read(Ptr, TypeName, FieldName) ->
-    case effi_type:field_info(TypeName, FieldName) of
+    case cffi_type:field_info(TypeName, FieldName) of
         {FType, Offset} ->
-            FPtr = effi_nif:ptr_add(Ptr, Offset),
+            FPtr = cffi_nif:ptr_add(Ptr, Offset),
             read(FPtr, FType);
         not_found ->
             error({unknown_field, TypeName, FieldName})
@@ -240,9 +240,9 @@ struct_read(Ptr, TypeName, FieldName) ->
 
 -spec struct_write(reference(), atom(), atom(), term()) -> ok.
 struct_write(Ptr, TypeName, FieldName, Value) ->
-    case effi_type:field_info(TypeName, FieldName) of
+    case cffi_type:field_info(TypeName, FieldName) of
         {FType, Offset} ->
-            FPtr = effi_nif:ptr_add(Ptr, Offset),
+            FPtr = cffi_nif:ptr_add(Ptr, Offset),
             write(FPtr, FType, Value);
         not_found ->
             error({unknown_field, TypeName, FieldName})
@@ -254,7 +254,7 @@ struct_to_map(Ptr, TypeName) ->
     Fields = struct_fields(TypeName),
     maps:from_list([
         begin
-            FPtr = effi_nif:ptr_add(Ptr, Offset),
+            FPtr = cffi_nif:ptr_add(Ptr, Offset),
             {FName, read(FPtr, FType)}
         end
         || {FName, FType, Offset} <- Fields
@@ -267,7 +267,7 @@ map_to_struct(Ptr, TypeName, Map) ->
     lists:foreach(fun({FName, FType, Offset}) ->
         case maps:find(FName, Map) of
             {ok, Val} ->
-                FPtr = effi_nif:ptr_add(Ptr, Offset),
+                FPtr = cffi_nif:ptr_add(Ptr, Offset),
                 write(FPtr, FType, Val);
             error -> ok
         end
@@ -279,7 +279,7 @@ map_to_struct(Ptr, TypeName, Map) ->
 
 -spec array_ptr(reference(), term(), non_neg_integer()) -> reference().
 array_ptr(Ptr, ElemType, Index) ->
-    effi_nif:ptr_add(Ptr, effi_type:sizeof(ElemType) * Index).
+    cffi_nif:ptr_add(Ptr, cffi_type:sizeof(ElemType) * Index).
 
 -spec array_read(reference(), term(), non_neg_integer()) -> term().
 array_read(Ptr, ElemType, Index) ->
@@ -294,19 +294,19 @@ array_write(Ptr, ElemType, Index, Value) ->
 %% -------------------------------------------------------------------------
 
 -spec ptr_add(reference(), integer()) -> reference().
-ptr_add(Ptr, Offset) -> effi_nif:ptr_add(Ptr, Offset).
+ptr_add(Ptr, Offset) -> cffi_nif:ptr_add(Ptr, Offset).
 
 -spec null() -> reference().
-null() -> effi_nif:ptr_null().
+null() -> cffi_nif:ptr_null().
 
 -spec is_null(reference()) -> boolean().
-is_null(Ptr) -> effi_nif:ptr_is_null(Ptr).
+is_null(Ptr) -> cffi_nif:ptr_is_null(Ptr).
 
 -spec type_size(term()) -> non_neg_integer().
-type_size(Type) -> effi_type:sizeof(Type).
+type_size(Type) -> cffi_type:sizeof(Type).
 
 -spec align_of(term()) -> pos_integer().
-align_of(Type) -> effi_type:alignof(Type).
+align_of(Type) -> cffi_type:alignof(Type).
 
 %% -------------------------------------------------------------------------
 %% Scoped allocation
@@ -321,7 +321,7 @@ with_alloc(Bytes, Fun) ->
 
 -spec with_alloc(term(), pos_integer(), fun((reference()) -> R)) -> R.
 with_alloc(Type, Count, Fun) ->
-    with_alloc(effi_type:sizeof(Type) * Count, Fun).
+    with_alloc(cffi_type:sizeof(Type) * Count, Fun).
 
 %% -------------------------------------------------------------------------
 %% Internal helpers
@@ -329,7 +329,7 @@ with_alloc(Type, Count, Fun) ->
 
 %% Resolve typedef chains to a base type name.
 resolve_typedef(T) when is_atom(T) ->
-    case effi_type:lookup(T) of
+    case cffi_type:lookup(T) of
         {typedef, Inner} -> resolve_typedef(Inner);
         _                -> T
     end;
@@ -340,7 +340,7 @@ resolve_typedef(T) -> T.
 primitive_type({array, _, _}) -> pointer;
 primitive_type({ptr, _})      -> pointer;
 primitive_type(T) when is_atom(T) ->
-    case effi_type:lookup(T) of
+    case cffi_type:lookup(T) of
         {struct, _, _, _} -> pointer;
         {union,  _, _, _} -> pointer;
         {enum,   _, _}    -> int32;
@@ -357,7 +357,7 @@ resolve_arg_for_nif({Type, Value}) ->
 resolve_type_for_nif(Type) ->
     case resolve_typedef(Type) of
         T when is_atom(T) ->
-            case effi_type:lookup(T) of
+            case cffi_type:lookup(T) of
                 {enum,   _, _}    -> int32;
                 {struct, _, _, _} -> pointer;
                 {union,  _, _, _} -> pointer;
@@ -369,7 +369,7 @@ resolve_type_for_nif(Type) ->
     end.
 
 resolve_value_for_nif(Type, Value) ->
-    case effi_type:lookup(resolve_typedef(Type)) of
+    case cffi_type:lookup(resolve_typedef(Type)) of
         {enum, ToInt, _} when is_atom(Value) ->
             case maps:find(Value, ToInt) of
                 {ok, V} -> V;
@@ -381,7 +381,7 @@ resolve_value_for_nif(Type, Value) ->
 
 %% For call/4 return: convert NIF value back to user-facing type.
 unmarshal_ret(RetType, Val) ->
-    case effi_type:lookup(resolve_typedef(RetType)) of
+    case cffi_type:lookup(resolve_typedef(RetType)) of
         {enum, _, ToAtom} when is_integer(Val) ->
             maps:get(Val, ToAtom, Val);
         {typedef, Inner} ->
@@ -392,7 +392,7 @@ unmarshal_ret(RetType, Val) ->
 
 %% Extract field list from a registered struct/union.
 struct_fields(TypeName) ->
-    case effi_type:lookup(TypeName) of
+    case cffi_type:lookup(TypeName) of
         {struct, _, _, Fields} -> Fields;
         {union,  _, _, Fields} -> Fields;
         not_found -> error({unknown_type, TypeName})

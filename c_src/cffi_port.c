@@ -1,5 +1,5 @@
 /*
- * effi_port.c — Safe-mode port executable for Erlang CFFI.
+ * cffi_port.c — Safe-mode port executable for Erlang CFFI.
  *
  * Runs as a separate OS process. Communicates with the Erlang VM via
  * stdin/stdout using 4-byte big-endian length-prefixed binary frames.
@@ -51,7 +51,7 @@
 #include <dlfcn.h>
 
 /* =========================================================
- * Op and type constants (must match effi_port.erl)
+ * Op and type constants (must match cffi_port.erl)
  * ========================================================= */
 
 #define OP_LOAD_LIB    1

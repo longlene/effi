@@ -1,23 +1,23 @@
-%% effi_transform.erl — Compile-time parse transform for effi bindings.
+%% cffi_transform.erl — Compile-time parse transform for cffi bindings.
 %%
 %% Usage: add to your module:
 %%
 %%   -module(my_lib).
-%%   -compile({parse_transform, effi_transform}).
+%%   -compile({parse_transform, cffi_transform}).
 %%
-%%   -effi_lib("libm.so.6").
-%%   -effi_fun({sqrt,  double,  [double]}).
-%%   -effi_fun({pow,   double,  [double, double]}).
-%%   -effi_fun({floor, double,  [double]}).
+%%   -cffi_lib("libm.so.6").
+%%   -cffi_fun({sqrt,  double,  [double]}).
+%%   -cffi_fun({pow,   double,  [double, double]}).
+%%   -cffi_fun({floor, double,  [double]}).
 %%
 %% The transform generates:
 %%
-%%   (1) A private '$effi_lib$'/0 function that loads the library lazily
+%%   (1) A private '$cffi_lib$'/0 function that loads the library lazily
 %%       via persistent_term on first call.
 %%
-%%   (2) One public wrapper function per -effi_fun:
+%%   (2) One public wrapper function per -cffi_fun:
 %%         sqrt(Arg0) ->
-%%             case effi:call('$effi_lib$'(), "sqrt", double, [{double, Arg0}]) of
+%%             case cffi:call('$cffi_lib$'(), "sqrt", double, [{double, Arg0}]) of
 %%                 {ok, R} -> R;
 %%                 {error, E} -> error(E)
 %%             end.
@@ -26,24 +26,24 @@
 %%
 %% Attribute formats:
 %%
-%%   -effi_lib(LibPath).
+%%   -cffi_lib(LibPath).
 %%     LibPath : string, e.g. "libm.so.6"
 %%
-%%   -effi_fun({FuncName, RetType, [ArgType]}).
+%%   -cffi_fun({FuncName, RetType, [ArgType]}).
 %%     FuncName : atom — used as both Erlang name and C symbol
 %%     RetType  : type atom (void | int32 | double | pointer | ...)
 %%     [ArgType]: list of type atoms
 %%
-%%   -effi_fun({{ErlName, "c_name"}, RetType, [ArgType]}).
+%%   -cffi_fun({{ErlName, "c_name"}, RetType, [ArgType]}).
 %%     ErlName  : atom for the Erlang function
 %%     "c_name" : C symbol to look up via dlsym
 
--module(effi_transform).
+-module(cffi_transform).
 -export([parse_transform/2]).
 
 parse_transform(Forms, _Opts) ->
-    LibPath  = find_attr(effi_lib, Forms),
-    FunSpecs = find_all_attr(effi_fun, Forms),
+    LibPath  = find_attr(cffi_lib, Forms),
+    FunSpecs = find_all_attr(cffi_fun, Forms),
 
     case LibPath =:= undefined andalso FunSpecs =:= [] of
         true  -> Forms;  %% nothing to do
@@ -56,12 +56,12 @@ transform(Forms, LibPath, RawSpecs) ->
 
     %% Validate
     case LibPath =:= undefined andalso Specs =/= [] of
-        true  -> error({effi_transform, missing_effi_lib, ModName});
+        true  -> error({cffi_transform, missing_cffi_lib, ModName});
         false -> ok
     end,
 
-    %% Strip effi_* module attributes
-    Clean = [F || F <- Forms, not is_effi_attr(F)],
+    %% Strip cffi_* module attributes
+    Clean = [F || F <- Forms, not is_cffi_attr(F)],
 
     %% Generate new forms
     Generated =
@@ -90,9 +90,9 @@ find_attr(Name, Forms) ->
 find_all_attr(Name, Forms) ->
     [V || {attribute, _, N, V} <- Forms, N =:= Name].
 
-is_effi_attr({attribute, _, effi_lib, _}) -> true;
-is_effi_attr({attribute, _, effi_fun, _}) -> true;
-is_effi_attr(_) -> false.
+is_cffi_attr({attribute, _, cffi_lib, _}) -> true;
+is_cffi_attr({attribute, _, cffi_fun, _}) -> true;
+is_cffi_attr(_) -> false.
 
 %% -------------------------------------------------------------------------
 %% Fun spec parsing
@@ -122,16 +122,16 @@ gen_exports(Specs) ->
     end.
 
 %% Generate:
-%%   '$effi_lib$'() ->
-%%       case persistent_term:get({effi_lib, ModName}, undefined) of
+%%   '$cffi_lib$'() ->
+%%       case persistent_term:get({cffi_lib, ModName}, undefined) of
 %%           {Lib_} -> Lib_;
 %%           undefined ->
-%%               {ok, Lib_} = effi:load(LibPath),
-%%               persistent_term:put({effi_lib, ModName}, {Lib_}),
+%%               {ok, Lib_} = cffi:load(LibPath),
+%%               persistent_term:put({cffi_lib, ModName}, {Lib_}),
 %%               Lib_
 %%       end.
 gen_lib_loader(ModName, LibPath) ->
-    Key = tup([atm(effi_lib), atm(ModName)]),
+    Key = tup([atm(cffi_lib), atm(ModName)]),
 
     LoadedClause = clause(
         [tup([var('Lib_')])],
@@ -140,7 +140,7 @@ gen_lib_loader(ModName, LibPath) ->
     UndefClause = clause(
         [atm(undefined)],
         [match(tup([atm(ok), var('Lib_')]),
-               rcall(effi, load, [str(LibPath)])),
+               rcall(cffi, load, [str(LibPath)])),
          rcall(persistent_term, put, [Key, tup([var('Lib_')])]),
          var('Lib_')]),
 
@@ -148,11 +148,11 @@ gen_lib_loader(ModName, LibPath) ->
              rcall(persistent_term, get, [Key, atm(undefined)]),
              [LoadedClause, UndefClause]}],
 
-    [func('$effi_lib$', 0, [clause([], Body)])].
+    [func('$cffi_lib$', 0, [clause([], Body)])].
 
-%% Generate wrapper function for one -effi_fun spec:
+%% Generate wrapper function for one -cffi_fun spec:
 %%   FuncName(Arg0, Arg1, ...) ->
-%%       case effi:call('$effi_lib$'(), "c_name", RetType,
+%%       case cffi:call('$cffi_lib$'(), "c_name", RetType,
 %%                      [{T0, Arg0}, {T1, Arg1}, ...]) of
 %%           {ok, R_} -> R_;
 %%           {error, E_} -> error(E_)
@@ -162,8 +162,8 @@ gen_fun_wrapper({ErlName, CName, RetType, ArgTypes}) ->
     ArgVars = [var(arg_var(I)) || I <- lists:seq(0, Arity - 1)],
     ArgPairs = mk_list([tup([atm(T), var(arg_var(I))])
                         || {T, I} <- lists:zip(ArgTypes, lists:seq(0, Arity - 1))]),
-    CallExpr = rcall(effi, call,
-                     [lcall('$effi_lib$', []),
+    CallExpr = rcall(cffi, call,
+                     [lcall('$cffi_lib$', []),
                       str(CName),
                       atm(RetType),
                       ArgPairs]),
