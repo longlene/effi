@@ -17,7 +17,7 @@ all() ->
 %% -------------------------------------------------------------------------
 
 t_nif_int(_Config) ->
-    {ok, Lib} = cffi:load("libc.so.6"),
+    {ok, Lib} = cffi:load(libname(libc)),
     Buf = cffi:alloc(64),
     %% snprintf(buf, 64, "%d", 42)  →  "42"  (returns 2)
     {ok, 2} = cffi:call_va(Lib, "snprintf", int32, 3,
@@ -28,7 +28,7 @@ t_nif_int(_Config) ->
     cffi:free(Buf).
 
 t_nif_float(_Config) ->
-    {ok, Lib} = cffi:load("libc.so.6"),
+    {ok, Lib} = cffi:load(libname(libc)),
     Buf = cffi:alloc(64),
     %% snprintf(buf, 64, "%.3f", 3.14159)  →  "3.142"  (returns 5)
     {ok, 5} = cffi:call_va(Lib, "snprintf", int32, 3,
@@ -39,7 +39,7 @@ t_nif_float(_Config) ->
     cffi:free(Buf).
 
 t_nif_string(_Config) ->
-    {ok, Lib} = cffi:load("libc.so.6"),
+    {ok, Lib} = cffi:load(libname(libc)),
     Buf = cffi:alloc(64),
     {ok, 5} = cffi:call_va(Lib, "snprintf", int32, 3,
                   [{pointer, Buf}, {uint64, 64},
@@ -49,7 +49,7 @@ t_nif_string(_Config) ->
     cffi:free(Buf).
 
 t_nif_multi(_Config) ->
-    {ok, Lib} = cffi:load("libc.so.6"),
+    {ok, Lib} = cffi:load(libname(libc)),
     Buf = cffi:alloc(64),
     %% snprintf(buf, 64, "%d+%d=%d", 1, 2, 3)  →  "1+2=3"  (returns 5)
     {ok, 5} = cffi:call_va(Lib, "snprintf", int32, 3,
@@ -64,7 +64,7 @@ t_nif_multi(_Config) ->
 %% -------------------------------------------------------------------------
 
 t_port_int(_Config) ->
-    {ok, Lib} = cffi_port:load("libc.so.6"),
+    {ok, Lib} = cffi_port:load(libname(libc)),
     Buf = cffi_port:alloc(Lib, 64),
     {ok, 2} = cffi_port:call_va(Lib, "snprintf", int32, 3,
                   [{pointer, Buf}, {uint64, 64},
@@ -75,7 +75,7 @@ t_port_int(_Config) ->
     cffi_port:close(Lib).
 
 t_port_float(_Config) ->
-    {ok, Lib} = cffi_port:load("libc.so.6"),
+    {ok, Lib} = cffi_port:load(libname(libc)),
     Buf = cffi_port:alloc(Lib, 64),
     {ok, 5} = cffi_port:call_va(Lib, "snprintf", int32, 3,
                   [{pointer, Buf}, {uint64, 64},
@@ -86,7 +86,7 @@ t_port_float(_Config) ->
     cffi_port:close(Lib).
 
 t_port_string(_Config) ->
-    {ok, Lib} = cffi_port:load("libc.so.6"),
+    {ok, Lib} = cffi_port:load(libname(libc)),
     Buf = cffi_port:alloc(Lib, 64),
     {ok, 5} = cffi_port:call_va(Lib, "snprintf", int32, 3,
                   [{pointer, Buf}, {uint64, 64},
@@ -110,3 +110,5 @@ port_read_cstr(Lib, Ptr, Len) ->
     Bin = cffi_port:read_bytes(Ptr, Len),
     _ = Lib,  %% not needed; Ptr encodes the pid
     binary:part(Bin, 0, byte_size(Bin) - 1).
+
+libname(libc) -> case os:type() of {unix, darwin} -> "libc.dylib"; _ -> "libc.so.6" end.

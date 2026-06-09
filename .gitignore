@@ -20,3 +20,7 @@ rebar3.crashdump
 *~
 priv/effi_nif.so
 priv/effi_port
+priv/cffi_nif.so
+priv/cffi_port
+doc/
+c_src/*.d

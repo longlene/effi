@@ -49,7 +49,7 @@ end_per_testcase(_TC, _Config) -> ok.
 %% -------------------------------------------------------------------------
 
 t_load(_Config) ->
-    {ok, Lib} = cffi:load("libm.so.6"),
+    {ok, Lib} = cffi:load(libname(libm)),
     true = is_reference(Lib),
     {error, _} = cffi:load("/no/such/lib.so").
 
@@ -58,7 +58,7 @@ t_load(_Config) ->
 %% -------------------------------------------------------------------------
 
 t_call_math(_Config) ->
-    {ok, Lib} = cffi:load("libm.so.6"),
+    {ok, Lib} = cffi:load(libname(libm)),
     {ok, 2.0} = cffi:call(Lib, "sqrt",  double, [{double, 4.0}]),
     {ok, 8.0} = cffi:call(Lib, "pow",   double, [{double, 2.0}, {double, 3.0}]),
     {ok, 3.0} = cffi:call(Lib, "floor", double, [{double, 3.7}]),
@@ -70,7 +70,7 @@ t_call_math(_Config) ->
 %% -------------------------------------------------------------------------
 
 t_call_void(_Config) ->
-    {ok, Libc} = cffi:load("libc.so.6"),
+    {ok, Libc} = cffi:load(libname(libc)),
     %% malloc → valid pointer
     {ok, Ptr} = cffi:call(Libc, "malloc", pointer, [{uint64, 16}]),
     false = cffi:is_null(Ptr),
@@ -136,7 +136,7 @@ t_read_write_bytes(_Config) ->
 
 t_typedef(_Config) ->
     %% Types defined in init_per_suite: my_double → double, real → my_double
-    {ok, Lib} = cffi:load("libm.so.6"),
+    {ok, Lib} = cffi:load(libname(libm)),
     {ok, 2.0} = cffi:call(Lib, "sqrt", real, [{real, 4.0}]),
     Ptr = cffi:alloc(8),
     ok  = cffi:write(Ptr, real, 1.5),
@@ -249,7 +249,7 @@ t_with_alloc(_Config) ->
 %% -------------------------------------------------------------------------
 
 t_callback(_Config) ->
-    {ok, Libc} = cffi:load("libc.so.6"),
+    {ok, Libc} = cffi:load(libname(libc)),
 
     Vals = [5, 3, 8, 1, 2],
     N    = length(Vals),
@@ -283,7 +283,7 @@ t_callback(_Config) ->
 %% -------------------------------------------------------------------------
 
 t_varargs(_Config) ->
-    {ok, Libc} = cffi:load("libc.so.6"),
+    {ok, Libc} = cffi:load(libname(libc)),
     Buf = cffi:alloc(64),
 
     {ok, 2} = cffi:call_va(Libc, "snprintf", int32, 3,
@@ -306,3 +306,6 @@ t_varargs(_Config) ->
 %% -------------------------------------------------------------------------
 
 trim_nul(Bin) -> binary:part(Bin, 0, byte_size(Bin) - 1).
+
+libname(libm) -> case os:type() of {unix, darwin} -> "libm.dylib"; _ -> "libm.so.6" end;
+libname(libc) -> case os:type() of {unix, darwin} -> "libc.dylib"; _ -> "libc.so.6" end.
